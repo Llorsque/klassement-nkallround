@@ -4,7 +4,7 @@
 // ════════════════════════════════════════════════════════
 const EVENT_ID = "2026_NED_0004";
 const LIVE_BASE = "https://liveresults.schaatsen.nl/events/" + EVENT_ID + "/competition";
-const POLL_MS = 15_000;
+const POLL_MS = 10_000;
 const DISTANCES = {
   v: [
     { key:"d1_500",  label:"500m",  meters:500,  divisor:1  },
