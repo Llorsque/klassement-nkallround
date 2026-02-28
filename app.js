@@ -79,6 +79,7 @@ function fmtTime(sec){if(!Number.isFinite(sec)||sec<=0)return"—";const m=Math.
 function fmtDelta(sec){if(!Number.isFinite(sec))return"—";const r3=Math.round(sec*1000)/1000;const sign=r3<0?"−":"+",abs=Math.abs(r3);const m=Math.floor(abs/60);const r2=Math.round((abs-m*60)*100)/100;const str=r2.toFixed(2);return m>0?`${sign}${m}:${str.padStart(5,"0").replace(".",",")}`:`${sign}${str.replace(".",",")}`}
 function fmtPts(p){return Number.isFinite(p)?p.toFixed(3):"—"}
 function trunc3(n){return Math.floor(n*1000)/1000}
+function trunc2(n){return Math.floor(n*100)/100}
 function round3(n){return Math.round(n*1000)/1000}
 function medal(r){return{1:"🥇",2:"🥈",3:"🥉"}[r]??""}
 function podCls(r){return r>=1&&r<=3?` row--${["","gold","silver","bronze"][r]}`:"";}
@@ -107,7 +108,7 @@ function extractTimes(text,parts){
 }
 async function fetchGender(g){
   const ds=DISTANCES[g],cs=COMP_IDS[g],ps=PARTICIPANTS[g],all={};
-  for(const d of ds){const t=await fetchPageText(cs[d.key]);all[d.key]=[];if(!t){await sleep(300);continue}const tm=extractTimes(t,ps);for(const p of ps){const v=tm.get(norm(p.name));if(v){const sec=parseTime(v);if(sec!=null)all[d.key].push({name:p.name,time:v,seconds:sec})}}console.log(`[NK] ${g} ${d.label}: ${all[d.key].length}`);await sleep(400)}
+  for(const d of ds){const t=await fetchPageText(cs[d.key]);all[d.key]=[];if(!t){await sleep(300);continue}const tm=extractTimes(t,ps);for(const p of ps){const v=tm.get(norm(p.name));if(v){const sec=parseTime(v);if(sec!=null)all[d.key].push({name:p.name,time:v,seconds:trunc2(sec)})}}console.log(`[NK] ${g} ${d.label}: ${all[d.key].length}`);await sleep(400)}
   dataCache[g]=all;lastFetch[g]=new Date();
 }
 
