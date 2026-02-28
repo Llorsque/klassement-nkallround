@@ -151,33 +151,76 @@ async function fetchComp(compId){
   const k=`${EVENT_ID}_${compId}`;
   const c=CACHE[k];if(c&&Date.now()-c.ts<CACHE_TTL)return c.data;
   const url=`${API}/events/${EVENT_ID}/competitions/${compId}/results/?inSeconds=1`;
-  function tFetch(u,ms){const ctrl=new AbortController();const t=setTimeout(()=>ctrl.abort(),ms);return fetch(u,{signal:ctrl.signal,headers:{Accept:"application/json"}}).finally(()=>clearTimeout(t))}
-  // Direct
-  try{const r=await tFetch(url,4000);if(r.ok){const d=await r.json();CACHE[k]={data:d,ts:Date.now()};return d}}catch(_){}
-  // Proxies
-  for(const p of[
-    `https://corsproxy.io/?${encodeURIComponent(url)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-  ]){try{const r=await tFetch(p,7000);if(!r.ok)continue;const txt=await r.text();if(!txt||txt.length<10)continue;const d=JSON.parse(txt);CACHE[k]={data:d,ts:Date.now()};return d}catch(_){}}
+
+  function tFetch(u,ms){
+    const ctrl=new AbortController();
+    const t=setTimeout(()=>ctrl.abort(),ms);
+    return fetch(u,{signal:ctrl.signal}).finally(()=>clearTimeout(t));
+  }
+
+  // Validate: must be array or object with results array
+  function isValidData(d){
+    if(Array.isArray(d)&&d.length>0)return true;
+    if(d&&typeof d==="object"){
+      const r=d.results??d.Results??d.competitors??d.Competitors??d.data?.results;
+      if(Array.isArray(r))return true;
+    }
+    return false;
+  }
+
+  // Skip direct fetch (always CORS-blocked from GitHub Pages)
+  // Go straight to proxies
+  const proxies=[
+    {name:"corsproxy", url:`https://corsproxy.io/?${encodeURIComponent(url)}`},
+    {name:"allorigins", url:`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`},
+    {name:"codetabs", url:`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`},
+  ];
+
+  for(const proxy of proxies){
+    try{
+      const r=await tFetch(proxy.url, 8000);
+      if(!r.ok){console.log(`[NK] C${compId} ${proxy.name}: HTTP ${r.status}`);continue}
+      const txt=await r.text();
+      if(!txt||txt.length<20){console.log(`[NK] C${compId} ${proxy.name}: empty (${txt?.length??0}b)`);continue}
+
+      let d;
+      try{
+        d=JSON.parse(txt);
+        // allorigins wraps in {"contents":"..."} — unwrap it
+        if(d&&typeof d.contents==="string"){
+          try{d=JSON.parse(d.contents)}catch(_){console.log(`[NK] C${compId} ${proxy.name}: contents not JSON`);continue}
+        }
+      }catch(_){
+        // Maybe HTML error page
+        console.log(`[NK] C${compId} ${proxy.name}: not JSON (${txt.slice(0,80)})`);
+        continue;
+      }
+
+      if(isValidData(d)){
+        const count=parseApi(d).length;
+        console.log(`[NK] C${compId} ${proxy.name}: ✅ ${count} results (${txt.length}b)`);
+        CACHE[k]={data:d,ts:Date.now()};
+        return d;
+      }else{
+        console.log(`[NK] C${compId} ${proxy.name}: no results in data`,JSON.stringify(d).slice(0,120));
+      }
+    }catch(e){
+      console.log(`[NK] C${compId} ${proxy.name}: ${e.name==="AbortError"?"timeout":e.message}`);
+    }
+  }
+  console.warn(`[NK] C${compId}: ALL PROXIES FAILED`);
   return null;
 }
 
 async function fetchAll(){
-  const compIds = COMP_IDS[state.gender];
-  const ids = Object.values(compIds);
-  // Also fetch other gender's comps for kwalificatie view
-  const otherIds = Object.values(COMP_IDS[state.gender==="v"?"m":"v"]);
-  const allIds = [...new Set([...ids,...otherIds])];
-  const missing = allIds.filter(c=>!CACHE[`${EVENT_ID}_${c}`]||Date.now()-CACHE[`${EVENT_ID}_${c}`].ts>=CACHE_TTL);
-  if(missing.length===0)return;
-  console.log(`[NK] Fetching [${missing.join(",")}]`);
-  for(const c of missing){await fetchComp(c);await sleep(250)}
-  // Retry failures
-  const failed=missing.filter(c=>!CACHE[`${EVENT_ID}_${c}`]?.data);
-  if(failed.length>0){console.log(`[NK] Retry [${failed.join(",")}]`);await sleep(600);for(const c of failed){await fetchComp(c);await sleep(300)}}
-  const ok=allIds.filter(c=>CACHE[`${EVENT_ID}_${c}`]?.data).length;
-  console.log(`[NK] Cache: ${ok}/${allIds.length}`);
+  // Only fetch current gender's comps (4), not all 8
+  const ids=Object.values(COMP_IDS[state.gender]);
+  const missing=ids.filter(c=>!CACHE[`${EVENT_ID}_${c}`]||Date.now()-CACHE[`${EVENT_ID}_${c}`].ts>=CACHE_TTL);
+  if(!missing.length)return;
+  console.log(`[NK] Fetching ${state.gender} comps [${missing.join(",")}]`);
+  for(const c of missing){await fetchComp(c);await sleep(400)}
+  const ok=ids.filter(c=>CACHE[`${EVENT_ID}_${c}`]?.data).length;
+  console.log(`[NK] ${state.gender}: ${ok}/${ids.length} comps cached`);
 }
 
 function parseApi(data){
@@ -357,8 +400,16 @@ function renderH2H(){
 }
 
 // ── VIEW: KWALIFICATIE ──────────────────────────────────
-function renderKwalificatie(){
+async function renderKwalificatie(){
   el.viewTitle.textContent="Kwalificatie Slotafstand";
+  // Ensure both genders' data is fetched
+  const otherG=state.gender==="v"?"m":"v";
+  const otherIds=Object.values(COMP_IDS[otherG]);
+  const need=otherIds.filter(c=>!CACHE[`${EVENT_ID}_${c}`]?.data);
+  if(need.length>0){
+    el.contentArea.innerHTML='<div class="info-box">⏳ Data laden voor beide categorieën...</div>';
+    for(const c of need){await fetchComp(c);await sleep(400)}
+  }
   let html="";
   for(const gen of["v","m"]){
     const q=QUAL_CONFIG[gen],dists=DISTANCES[gen],parts=PARTICIPANTS[gen]??[],compIds=COMP_IDS[gen]??{};
@@ -458,16 +509,16 @@ function exportCSV(){const dists=getDists();if(!state.standings)return;const row
 function renderViewBtns(){const dists=getDists();const vs=[{key:"klassement",icon:"📊",label:"Klassement"},...dists.map(d=>({key:"distance",dk:d.key,icon:"⏱",label:d.label})),{key:"headToHead",icon:"⚔️",label:"Head to Head"},{key:"kwalificatie",icon:"⭐",label:"Kwalificatie"}];
   el.viewButtons.innerHTML=vs.map(v=>{const act=v.key===state.view&&(!v.dk||v.dk===state.distKey);return`<button class="tab ${act?"active":""}" data-view="${v.key}" ${v.dk?`data-dk="${v.dk}"`:""}>${v.icon} ${esc(v.label)}</button>`}).join("")}
 
-function render(){try{setActive(el.genderTabs,"gender",state.gender);saveHash();updateStatus();renderViewBtns();
+async function render(){try{setActive(el.genderTabs,"gender",state.gender);saveHash();updateStatus();renderViewBtns();
   if(el.h2hForm)el.h2hForm.hidden=state.view!=="headToHead";
   if(el.viewMeta)el.viewMeta.textContent=`${TOURNAMENT} · ${state.gender==="v"?"Vrouwen":"Mannen"}`;
   if(state.view==="distance"){if(!state.distKey)state.distKey=getDists()[0]?.key;return renderDistance()}
-  if(state.view==="headToHead")return renderH2H();if(state.view==="kwalificatie")return renderKwalificatie();return renderKlassement();
+  if(state.view==="headToHead")return renderH2H();if(state.view==="kwalificatie")return await renderKwalificatie();return renderKlassement();
   }catch(e){console.error("[NK] RENDER:",e);if(el.contentArea)el.contentArea.innerHTML=`<div style="color:#f87171;padding:20px;font-family:monospace"><h3>⚠️ Error</h3><pre>${e.message}\n${e.stack}</pre></div>`}}
 
 // ── EVENTS ──────────────────────────────────────────────
 function bind(){
-  el.genderTabs?.addEventListener("click",e=>{const b=e.target.closest(".tab");if(b?.dataset.gender){state.gender=b.dataset.gender;loadData();render()}});
+  el.genderTabs?.addEventListener("click",async e=>{const b=e.target.closest(".tab");if(b?.dataset.gender){state.gender=b.dataset.gender;loadData();await render();fetchAll().then(()=>{loadData();render()})}});
   el.viewButtons?.addEventListener("click",e=>{const b=e.target.closest(".tab");if(!b)return;state.view=b.dataset.view;if(b.dataset.dk)state.distKey=b.dataset.dk;render()});
   el.h2hRiderA?.addEventListener("change",()=>{state.h2h.riderA=el.h2hRiderA.value;render()});
   el.h2hRiderB?.addEventListener("change",()=>{state.h2h.riderB=el.h2hRiderB.value;render()});
@@ -481,14 +532,19 @@ function bind(){
 
 // ── POLLING ─────────────────────────────────────────────
 let pollT=null;
-function startPoll(){stopPoll();async function tick(){try{for(let c=1;c<=8;c++)delete CACHE[`${EVENT_ID}_${c}`];await fetchAll();loadData();render()}catch(e){console.warn("[NK] poll:",e)}pollT=setTimeout(tick,15_000)}pollT=setTimeout(tick,15_000)}
+function startPoll(){stopPoll();async function tick(){try{
+  // Only invalidate current gender's comps
+  const ids=Object.values(COMP_IDS[state.gender]);
+  for(const c of ids)delete CACHE[`${EVENT_ID}_${c}`];
+  await fetchAll();loadData();await render();
+}catch(e){console.warn("[NK] poll:",e)}pollT=setTimeout(tick,15_000)}pollT=setTimeout(tick,15_000)}
 function stopPoll(){if(pollT){clearTimeout(pollT);pollT=null}}
 
 // ── BOOT ────────────────────────────────────────────────
 async function boot(){
   try{cacheEls();loadHash();loadManual();bind();
-  loadData();render();console.log("[NK] Rendered (no data)");
-  await fetchAll();loadData();render();console.log("[NK] Live ✅");
+  loadData();await render();console.log("[NK] Rendered (no data)");
+  await fetchAll();loadData();await render();console.log("[NK] Live ✅");
   }catch(e){console.error("[NK] BOOT:",e);const ca=document.getElementById("contentArea");if(ca)ca.innerHTML=`<div style="color:#f87171;padding:20px;font-family:monospace"><h3>⚠️ Boot Error</h3><pre>${e.message}\n${e.stack}</pre></div>`}
   startPoll();
 }
