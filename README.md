@@ -2,44 +2,36 @@
 
 Live klassementtool voor het NK Allround schaatsen 2026 in Thialf, Heerenveen (1-2 maart 2026).
 
-## Features
+## Data ophalen
 
-- **Live data** via `live-api.schaatsen.nl` (CORS proxy fallback, elke 15s bijgewerkt)
-- **Klassement** — meeste afstanden eerst, dan laagste punten
-- **Afstandsviews** — met live sidebar-klassement en startlijst-ritnummers
-- **Head-to-Head** — mirror-vergelijking tussen twee rijders
-- **Kwalificatie slotafstand** — berekent top 8 voor 5000m (♀) / 10.000m (♂)
-- **Handmatige invoer** — per rijder of plak-modus
-- **Athlete popup** — klik op naam voor persoonlijke stats
-- **CSV export**
-- **URL hash** — behoudt pagina bij refresh
+Live resultaten worden opgehaald via **Jina Reader** (`r.jina.ai`) van `liveresults.schaatsen.nl`. Geen eigen backend nodig — werkt volledig als statische GitHub Pages site.
 
-## Afstanden
+```
+Bron:   liveresults.schaatsen.nl/events/2026_NED_0004/competition/{1-8}/results
+Proxy:  r.jina.ai (primair) → allorigins.win (fallback)
+```
 
-| Vrouwen | Mannen |
-|---------|--------|
-| 500m | 500m |
-| 3000m | 5000m |
-| 1500m | 1500m |
-| 5000m | 10.000m |
+## Comp IDs
 
-## Tijdnotatie
+| ID | Afstand |
+|----|---------|
+| C1 | 500m ♀ |
+| C2 | 500m ♂ |
+| C3 | 3000m ♀ |
+| C4 | 5000m ♂ |
+| C5 | 1500m ♀ |
+| C6 | 1500m ♂ |
+| C7 | 5000m ♀ |
+| C8 | 10.000m ♂ |
 
-- Onder 1 minuut: `38.955` (punt)
-- Boven 1 minuut: `4:19,650` (komma, Nederlands)
+## Modules
 
-## Deelnemers
-
-40 schaatsers (20 vrouwen + 20 mannen) uit officiële KNSB deelnemerslijsten. Startlijsten (zaterdag) uit Sportity/KNSB PDFs.
+- **Afstandsklassement** — ranglijst per afstand op tijd
+- **Algemeen klassement** — punten = tijd ÷ divisor, laagste wint
+- **Head-to-Head** — vergelijk rijders met leider, target, en onderling
+- **Deelnemers** — overzicht met actief/inactief toggle
+- **Kwalificatie** — top 8 voor slotafstand (5000m ♀ / 10.000m ♂)
 
 ## Gebruik
 
-Open `index.html` in een browser, of deploy naar GitHub Pages.
-
-## Databron
-
-```
-https://live-api.schaatsen.nl/events/2026_NED_0004/competitions/{compId}/results/?inSeconds=1
-```
-
-CORS proxies: corsproxy.io → allorigins.win → codetabs.com (fallback chain).
+Open `index.html` in een browser, of deploy via GitHub Pages.
