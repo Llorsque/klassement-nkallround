@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>NK Allround 2026 — Klassement</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="bg-orbs" aria-hidden="true"><div class="bg-orb bg-orb--1"></div><div class="bg-orb bg-orb--2"></div></div>
+  <header class="topbar">
+    <div class="topbar__brand">
+      <span class="topbar__logo">⛸</span>
+      <span class="topbar__title">NK Allround 2026</span>
+      <span id="statusBadge" class="status-badge status-badge--waiting"><span class="status-badge__pulse"></span><span class="status-badge__text">Wachten</span></span>
+    </div>
+    <div class="topbar__controls">
+      <div id="genderTabs" class="tab-group">
+        <button class="tab" data-gender="v">♀ Vrouwen</button>
+        <button class="tab" data-gender="m">♂ Mannen</button>
+      </div>
+      <button id="debugBtn" class="btn btn--ghost" title="Debug">🔍</button>
+    </div>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <div class="sidebar__label">Weergave</div>
+      <div id="viewButtons" class="tab-group tab-group--vertical"></div>
+      <div class="sidebar__bottom">
+        <button id="entryBtn" class="cta cta--entry">⚡ Invoer</button>
+        <button id="exportBtn" class="btn btn--outline btn--sm">📥 CSV</button>
+      </div>
+    </nav>
+    <main class="stage">
+      <div class="stage__header">
+        <h1 id="viewTitle" class="stage__title">Klassement</h1>
+        <div id="viewMeta" class="stage__meta"></div>
+      </div>
+      <div id="contentArea" class="stage__body"></div>
+    </main>
+  </div>
+  <div id="h2hForm" class="h2h-bar" hidden>
+    <select id="h2hRiderA"></select><span class="h2h-bar__vs">VS</span><select id="h2hRiderB"></select>
+  </div>
+  <div id="entryModal" class="popup-overlay" hidden><div class="popup popup--entry"><div id="entryModalContent" class="popup__content"></div></div></div>
+  <div id="athletePopup" class="popup-overlay" hidden><div class="popup"><div id="popupContent" class="popup__content"></div></div></div>
+  <div id="debugPanel" class="popup-overlay" hidden><div class="popup popup--debug"><div id="debugContent" class="popup__content"></div></div></div>
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
