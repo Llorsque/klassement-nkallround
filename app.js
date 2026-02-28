@@ -1,19 +1,20 @@
 "use strict";
 // ════════════════════════════════════════════════════════
-// NK Allround 2026 — Step 1: Foundation + Data Fetch
-// Fetch via Jina Reader (r.jina.ai) — proven approach
+// NK Allround 2026 — Volledig Klassement
+// Fetch via Jina Reader (r.jina.ai)
 // ════════════════════════════════════════════════════════
 
 // ── CONFIG ──────────────────────────────────────────────
 const EVENT_ID = "2026_NED_0004";
 const LIVE_BASE = "https://liveresults.schaatsen.nl/events/" + EVENT_ID + "/competition";
+const POLL_MS = 15_000;
 
 const DISTANCES = {
   v: [
-    { key: "d1_500",  label: "500m",    meters: 500,   divisor: 1  },
-    { key: "d1_3000", label: "3000m",   meters: 3000,  divisor: 6  },
-    { key: "d1_1500", label: "1500m",   meters: 1500,  divisor: 3  },
-    { key: "d1_5000", label: "5000m",   meters: 5000,  divisor: 10 },
+    { key: "d1_500",  label: "500m",  meters: 500,  divisor: 1  },
+    { key: "d1_3000", label: "3000m", meters: 3000, divisor: 6  },
+    { key: "d1_1500", label: "1500m", meters: 1500, divisor: 3  },
+    { key: "d1_5000", label: "5000m", meters: 5000, divisor: 10 },
   ],
   m: [
     { key: "d1_500",   label: "500m",    meters: 500,   divisor: 1  },
@@ -28,7 +29,11 @@ const COMP_IDS = {
   m: { d1_500: 2, d1_5000: 4, d1_1500: 6, d1_10000: 8 },
 };
 
-// ── PARTICIPANTS ────────────────────────────────────────
+const QUAL_CONFIG = {
+  v: { qualDist: "d1_3000", finalDist: "d1_5000", first3: ["d1_500","d1_3000","d1_1500"], first2: ["d1_500","d1_3000"] },
+  m: { qualDist: "d1_5000", finalDist: "d1_10000", first3: ["d1_500","d1_5000","d1_1500"], first2: ["d1_500","d1_5000"] },
+};
+
 const PARTICIPANTS = {
   v: [
     { nr:1,  name:"Merel Conijn",       cat:"DSA", qual:"EK Allround" },
@@ -81,14 +86,9 @@ function norm(n) {
   return String(n ?? "").trim().toLowerCase()
     .normalize("NFD").replace(/\p{Diacritic}/gu, "")
     .replace(/[\u2018\u2019\u201A\u201B`\u00B4\u2032\u02BC\u02BB\u2060']/g, "'")
-    .replace(/[\u2010-\u2015]/g, "-")
-    .replace(/\s+/g, " ").trim();
+    .replace(/[\u2010-\u2015]/g, "-").replace(/\s+/g, " ").trim();
 }
-
-function esc(s) {
-  return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-}
-
+function esc(s) { return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function parseTime(raw) {
@@ -102,165 +102,192 @@ function parseTime(raw) {
 
 function fmtTime(sec) {
   if (!Number.isFinite(sec) || sec < 0) return "—";
-  const m = Math.floor(sec / 60);
-  const s = sec - m * 60;
-  const dec = (sec * 1000) % 10 === 0 ? 2 : 3;
-  const str = s.toFixed(dec).padStart(dec + 3, "0");
-  return m > 0 ? `${m}:${str.replace(".", ",")}` : str;
+  const m = Math.floor(sec / 60), s = sec - m * 60;
+  const str = s.toFixed(2).padStart(5, "0");
+  return m > 0 ? `${m}:${str.replace(".",",")}` : str;
 }
 
+function fmtDelta(sec) {
+  if (!Number.isFinite(sec)) return "—";
+  const sign = sec < 0 ? "-" : "+", abs = Math.abs(sec);
+  const m = Math.floor(abs / 60), s = abs - m * 60;
+  const str = s.toFixed(2).padStart(5, "0");
+  return m > 0 ? `${sign}${m}:${str.replace(".",",")}` : `${sign}${str}`;
+}
+
+function fmtPts(p) { return Number.isFinite(p) ? p.toFixed(3) : "—"; }
 function trunc3(n) { return Math.floor(n * 1000) / 1000; }
+function medal(r) { return { 1: "🥇", 2: "🥈", 3: "🥉" }[r] ?? ""; }
 
 // ── STATE ───────────────────────────────────────────────
-const state = { gender: "v", view: "status" };
-let dataSource = "waiting";
+const state = {
+  gender: "v",
+  view: "klassement",
+  distKey: null,
+  h2h: { riderA: null, riderB: null, target: null },
+};
+
+// inactive[gender] = Set of names
+const inactive = { v: new Set(), m: new Set() };
+function loadInactive() { try { const d = JSON.parse(localStorage.getItem("nk_allround_inactive") ?? "{}"); if (d.v) inactive.v = new Set(d.v); if (d.m) inactive.m = new Set(d.m); } catch(_){} }
+function saveInactive() { try { localStorage.setItem("nk_allround_inactive", JSON.stringify({ v: [...inactive.v], m: [...inactive.m] })); } catch(_){} }
+function isActive(name) { return !inactive[state.gender].has(name); }
+
+let liveData = {}; // { distKey → [{ name, time, seconds }] }
+let standings = null; // computed
 let lastUpdate = null;
-let lastFetchResults = {}; // distKey → [{ name, time, seconds }]
+let dataSource = "waiting";
 
 function getDists() { return DISTANCES[state.gender]; }
 function getComps() { return COMP_IDS[state.gender]; }
 function getParts() { return PARTICIPANTS[state.gender]; }
 
-// ── FETCH VIA JINA READER ───────────────────────────────
-const fetchLog = [];
-
+// ── FETCH (Jina Reader) ────────────────────────────────
 async function fetchPageText(compId) {
   const pageUrl = `${LIVE_BASE}/${compId}/results`;
-  const cacheBust = Date.now();
-
+  const cb = Date.now();
   const candidates = [
-    { name: "jina", url: `https://r.jina.ai/${pageUrl}?_=${cacheBust}` },
-    { name: "allorigins-raw", url: `https://api.allorigins.win/raw?url=${encodeURIComponent(pageUrl)}&cache=${cacheBust}` },
-    { name: "allorigins-get", url: `https://api.allorigins.win/get?url=${encodeURIComponent(pageUrl)}&cache=${cacheBust}` },
+    { name: "jina", url: `https://r.jina.ai/${pageUrl}?_=${cb}` },
+    { name: "allorigins", url: `https://api.allorigins.win/get?url=${encodeURIComponent(pageUrl)}&cache=${cb}` },
   ];
-
   for (const c of candidates) {
-    const t0 = Date.now();
     try {
       const res = await fetch(c.url, { cache: "no-store" });
-      if (!res.ok) {
-        fetchLog.push({ compId, source: c.name, status: `HTTP ${res.status}`, ms: Date.now() - t0 });
-        continue;
-      }
-
+      if (!res.ok) continue;
       let text;
-      if (c.name === "allorigins-get") {
-        const data = await res.json();
-        text = String(data?.contents ?? "");
-      } else {
-        text = await res.text();
-      }
-
-      if (text.length < 100) {
-        fetchLog.push({ compId, source: c.name, status: `too short (${text.length}b)`, ms: Date.now() - t0 });
-        continue;
-      }
-
-      fetchLog.push({ compId, source: c.name, status: "✅", ms: Date.now() - t0 });
-      return text;
-
-    } catch (e) {
-      fetchLog.push({ compId, source: c.name, status: e.message?.slice(0, 40) ?? "error", ms: Date.now() - t0 });
-    }
+      if (c.name === "allorigins") { const d = await res.json(); text = String(d?.contents ?? ""); }
+      else text = await res.text();
+      if (text.length > 100) { console.log(`[NK] C${compId} ${c.name}: ✅ (${text.length}b)`); return text; }
+    } catch(_){}
   }
+  console.warn(`[NK] C${compId}: fetch failed`);
   return null;
 }
 
-/**
- * Extract {name → time} from page text.
- * For each participant, find their name in the text, then look for
- * a time pattern nearby (within 300 chars).
- */
 function extractTimes(text, participants) {
   const normText = norm(text);
   const results = new Map();
   const timeRe = /(\d{1,2}:\d{2}[\.,]\d{2,3}|\d{1,3}[\.,]\d{2,3})/g;
-
   for (const p of participants) {
     const key = norm(p.name);
     if (!key) continue;
-
     let start = 0;
     while (true) {
       const idx = normText.indexOf(key, start);
       if (idx === -1) break;
-
-      const window = normText.slice(idx, Math.min(normText.length, idx + 300));
+      const win = normText.slice(idx, Math.min(normText.length, idx + 300));
       timeRe.lastIndex = 0;
-      const m = timeRe.exec(window);
-
-      if (m) {
-        const raw = m[1].replace(",", ".");
-        const sec = parseTime(raw);
-        if (sec != null) {
-          results.set(key, raw);
-          break;
-        }
-      }
+      const m = timeRe.exec(win);
+      if (m) { const raw = m[1].replace(",", "."); const sec = parseTime(raw); if (sec != null) { results.set(key, raw); break; } }
       start = idx + key.length;
     }
   }
   return results;
 }
 
-async function fetchCompResults(compId, participants) {
-  const text = await fetchPageText(compId);
-  if (!text) return [];
-
-  const timeMap = extractTimes(text, participants);
-  const results = [];
-
-  for (const p of participants) {
-    const key = norm(p.name);
-    const timeStr = timeMap.get(key);
-    if (timeStr) {
-      const sec = parseTime(timeStr);
-      if (sec != null) {
-        results.push({ name: p.name, time: timeStr, seconds: sec });
-      }
-    }
-  }
-  return results;
-}
-
 async function fetchAllDists(gender) {
-  const dists = DISTANCES[gender];
-  const comps = COMP_IDS[gender];
-  const parts = PARTICIPANTS[gender];
+  const dists = DISTANCES[gender], comps = COMP_IDS[gender], parts = PARTICIPANTS[gender];
   const all = {};
-
   for (const d of dists) {
-    const compId = comps[d.key];
-    console.log(`[NK] Fetching C${compId} (${d.label})...`);
-    const results = await fetchCompResults(compId, parts);
-    all[d.key] = results;
-    console.log(`[NK] C${compId} ${d.label}: ${results.length} times`);
-    await sleep(500);
+    const text = await fetchPageText(comps[d.key]);
+    if (!text) { all[d.key] = []; continue; }
+    const tm = extractTimes(text, parts);
+    all[d.key] = [];
+    for (const p of parts) {
+      const t = tm.get(norm(p.name));
+      if (t) { const sec = parseTime(t); if (sec != null) all[d.key].push({ name: p.name, time: t, seconds: sec }); }
+    }
+    console.log(`[NK] ${d.label}: ${all[d.key].length} times`);
+    await sleep(400);
   }
   return all;
+}
+
+// ── COMPUTE STANDINGS ───────────────────────────────────
+function computeStandings() {
+  const dists = getDists(), parts = getParts();
+  const athletes = parts.map(p => {
+    const a = { name: p.name, nr: p.nr, cat: p.cat, qual: p.qual, active: isActive(p.name),
+      times: {}, seconds: {}, points: {}, distRanks: {} };
+    for (const d of dists) {
+      const res = (liveData[d.key] ?? []).find(r => r.name === p.name);
+      if (res) { a.times[d.key] = res.time; a.seconds[d.key] = res.seconds; a.points[d.key] = trunc3(res.seconds / d.divisor); }
+    }
+    return a;
+  });
+
+  // Dist ranks (all athletes, not just active)
+  for (const d of dists) {
+    const sorted = athletes.filter(a => Number.isFinite(a.seconds[d.key])).sort((a, b) => a.seconds[d.key] - b.seconds[d.key]);
+    sorted.forEach((a, i) => { a.distRanks[d.key] = i + 1; });
+  }
+
+  // Overall points + rank (active only in ranking)
+  for (const a of athletes) {
+    let sum = 0, cnt = 0;
+    for (const d of dists) { const p = a.points[d.key]; if (Number.isFinite(p)) { sum += p; cnt++; } }
+    a.completedCount = cnt;
+    a.totalPoints = cnt === dists.length ? trunc3(sum) : null;
+    a.partialPoints = cnt > 0 ? trunc3(sum) : null;
+  }
+
+  // Sort: active first, then most dists → lowest points
+  const ranked = athletes.filter(a => a.active && a.completedCount > 0)
+    .sort((a, b) => {
+      if (a.completedCount !== b.completedCount) return b.completedCount - a.completedCount;
+      const ap = a.totalPoints ?? a.partialPoints, bp = b.totalPoints ?? b.partialPoints;
+      if (ap == null && bp == null) return 0; if (ap == null) return 1; if (bp == null) return -1;
+      return ap - bp;
+    });
+
+  ranked.forEach((a, i) => { a.rank = i + 1; });
+
+  const leader = ranked[0];
+  const leaderPts = leader?.totalPoints ?? leader?.partialPoints ?? null;
+  for (const a of ranked) {
+    const pts = a.totalPoints ?? a.partialPoints;
+    a.delta = Number.isFinite(leaderPts) && Number.isFinite(pts) ? trunc3(pts - leaderPts) : null;
+  }
+
+  // Inactive athletes: no rank
+  for (const a of athletes) if (!a.active) a.rank = null;
+
+  standings = { all: athletes, ranked, leader };
+  const total = athletes.filter(a => a.completedCount > 0).length;
+  dataSource = total > 0 ? "live" : "waiting";
 }
 
 // ── DOM ─────────────────────────────────────────────────
 const el = {};
 function cacheEls() {
-  for (const id of [
-    "statusBadge", "statusText", "genderTabs", "navButtons",
-    "entryBtn", "debugBtn", "main", "contentArea", "overlay",
-  ]) el[id] = document.getElementById(id);
+  for (const id of ["statusBadge","statusText","genderTabs","navButtons","entryBtn","debugBtn","contentArea","overlay"])
+    el[id] = document.getElementById(id);
 }
 
-function setStatus(src) {
-  dataSource = src;
+function setStatus() {
   if (!el.statusBadge) return;
-  el.statusBadge.className = `badge badge--${src}`;
-  el.statusText.textContent = src === "live" ? "Live" : src === "manual" ? "Handmatig" : "Wachten op data";
+  el.statusBadge.className = `badge badge--${dataSource}`;
+  el.statusText.textContent = dataSource === "live" ? "Live" : "Wachten op data";
 }
 
-// ── RENDER ──────────────────────────────────────────────
+// ── RENDER ROUTER ───────────────────────────────────────
+function render() {
+  setStatus();
+  renderNav();
+  el.genderTabs.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.gender === state.gender));
+  computeStandings();
+
+  if (state.view === "klassement") return renderKlassement();
+  if (state.view.startsWith("dist_")) { state.distKey = state.view.replace("dist_", ""); return renderDistance(); }
+  if (state.view === "h2h") return renderH2H();
+  if (state.view === "deelnemers") return renderDeelnemers();
+  if (state.view === "kwalificatie") return renderKwalificatie();
+  renderKlassement();
+}
+
 function renderNav() {
   const dists = getDists();
   const views = [
-    { key: "status", icon: "📡", label: "Data Status" },
     { key: "klassement", icon: "📊", label: "Klassement" },
     ...dists.map(d => ({ key: `dist_${d.key}`, icon: "⏱", label: d.label })),
     { key: "h2h", icon: "⚔️", label: "Head to Head" },
@@ -272,76 +299,383 @@ function renderNav() {
   ).join("");
 }
 
-function render() {
-  renderNav();
-  el.genderTabs.querySelectorAll(".tab").forEach(b =>
-    b.classList.toggle("active", b.dataset.gender === state.gender));
-  renderStatus();
-}
-
-function renderStatus() {
+// ── MODULE: KLASSEMENT ──────────────────────────────────
+function renderKlassement() {
   const dists = getDists();
-  const comps = getComps();
-  const parts = getParts();
+  if (!standings) return;
 
-  let totalMatched = 0;
-  const distRows = dists.map(d => {
-    const compId = comps[d.key];
-    const results = lastFetchResults[d.key] ?? [];
-    totalMatched += results.length;
-    const preview = results.slice(0, 3).map(r =>
-      `${esc(r.name.split(" ").pop())} ${r.time}`
-    ).join(" · ") || "—";
+  // Choose delta reference distance
+  const ndKey = state.distKey ?? dists[dists.length - 1]?.key;
+  const nd = dists.find(d => d.key === ndKey) ?? dists[dists.length - 1];
 
-    return `<tr>
-      <td>C${compId}</td>
-      <td>${esc(d.label)}</td>
-      <td class="mono">${results.length}/${parts.length}</td>
-      <td>${results.length > 0 ? '<span style="color:var(--green)">✅</span>' : '<span style="color:var(--text-muted)">—</span>'}</td>
-      <td class="mono" style="font-size:11px;color:var(--text-dim)">${preview}</td>
+  const distHdr = dists.map(d => `<th>${esc(d.label)}</th>`).join("");
+
+  const rows = standings.all.filter(a => a.active).sort((a, b) => {
+    if (a.rank != null && b.rank != null) return a.rank - b.rank;
+    if (a.rank != null) return -1; if (b.rank != null) return 1; return 0;
+  }).map(a => {
+    const cells = dists.map(d => {
+      const t = a.times[d.key], dr = a.distRanks[d.key];
+      const m = dr ? `<span class="dist-medal">${medal(dr)}</span>` : "";
+      return t ? `<td class="mono">${fmtTime(a.seconds[d.key])}${m}</td>` : `<td class="mono" style="color:var(--text-muted)">—</td>`;
+    }).join("");
+
+    const pts = a.totalPoints ?? a.partialPoints;
+    const ptsStr = Number.isFinite(pts) ? pts.toFixed(3) : "—";
+    const dim = a.totalPoints == null && a.completedCount > 0 ? ' style="opacity:.55"' : "";
+
+    let deltaStr = "";
+    if (a.delta === 0) deltaStr = '<span class="delta delta--leader">Leader</span>';
+    else if (Number.isFinite(a.delta) && nd) deltaStr = `<span class="delta">${fmtDelta(a.delta * nd.divisor)}</span>`;
+
+    const podCls = a.rank <= 3 ? ` row--${["","gold","silver","bronze"][a.rank]}` : "";
+
+    return `<tr class="${podCls}">
+      <td>${a.rank ? `<strong>${a.rank}</strong>` : "—"}</td>
+      <td><span class="athlete" data-name="${esc(a.name)}">${esc(a.name)}</span></td>
+      ${cells}
+      <td class="mono"${dim}><strong>${ptsStr}</strong></td>
+      <td>${deltaStr}</td>
     </tr>`;
   }).join("");
 
-  if (totalMatched > 0) setStatus("live");
-
-  const logLines = fetchLog.slice(-16).map(l => {
-    const cls = l.status === "✅" ? "ok" : l.status.startsWith("HTTP") ? "fail" : "warn";
-    return `<span class="${cls}">C${l.compId} ${l.source}: ${l.status} (${l.ms}ms)</span>`;
-  }).join("\n");
+  const opts = dists.map(d => `<option value="${d.key}" ${d.key === ndKey ? "selected" : ""}>${esc(d.label)}</option>`).join("");
+  const cc = dists.filter(d => standings.all.some(a => a.times[d.key])).length;
 
   el.contentArea.innerHTML = `
-    <h2 style="font-size:18px;font-weight:800;margin-bottom:4px">${state.gender === "v" ? "♀ Vrouwen" : "♂ Mannen"} — Data Status</h2>
-    <p style="font-size:12px;color:var(--text-dim);margin-bottom:16px">
-      ${parts.length} deelnemers · ${totalMatched} tijden geladen
-      ${lastUpdate ? ` · ${lastUpdate.toLocaleTimeString("nl-NL")}` : ""}
-    </p>
-
-    <div class="table-wrap">
-      <table class="table">
-        <thead><tr><th>Comp</th><th>Afstand</th><th>Match</th><th>Status</th><th>Preview (top 3)</th></tr></thead>
-        <tbody>${distRows}</tbody>
-      </table>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div>
+        <h2 style="font-size:18px;font-weight:800;margin-bottom:2px">Algemeen Klassement</h2>
+        <span style="font-size:12px;color:var(--text-dim)">Na ${cc}/${dists.length} afstanden${lastUpdate ? ` · ${lastUpdate.toLocaleTimeString("nl-NL")}` : ""}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:11px;color:var(--text-dim)">Δ op:</span>
+        <select id="ndSel" style="padding:4px 8px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-sm);font-size:12px">${opts}</select>
+      </div>
     </div>
-
-    <div style="margin-top:16px;display:flex;gap:8px">
-      <button id="refreshBtn" class="btn btn--primary">🔄 Opnieuw laden</button>
-    </div>
-
-    <div class="info-box" style="margin-top:16px">
-      <strong>Stap 1 — Data proof.</strong> Fetch via Jina Reader → liveresults.schaatsen.nl.<br>
-      Als je ✅ ziet en tijden in de preview, werkt de data pipeline. Dan gaan we door naar de modules.
-    </div>
-
-    ${logLines ? `<div class="debug-log">${logLines}</div>` : ""}
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>#</th><th>Naam</th>${distHdr}<th>Punten</th><th>Δ</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div class="info-box" style="margin-top:12px"><strong>Punten</strong> = tijd ÷ (meters ÷ 500). Laagste totaal wint. Δ = verschil met leider omgerekend naar de gekozen afstand.</div>
   `;
 
-  document.getElementById("refreshBtn")?.addEventListener("click", async () => {
-    el.contentArea.innerHTML = '<div class="info-box">⏳ Data ophalen via Jina Reader...</div>';
-    fetchLog.length = 0;
-    lastFetchResults = await fetchAllDists(state.gender);
-    lastUpdate = new Date();
+  document.getElementById("ndSel")?.addEventListener("change", e => { state.distKey = e.target.value; render(); });
+}
+
+// ── MODULE: AFSTAND ─────────────────────────────────────
+function renderDistance() {
+  const dists = getDists();
+  const dist = dists.find(d => d.key === state.distKey) ?? dists[0];
+  if (!dist || !standings) return;
+
+  const withTime = standings.all.filter(a => a.active && Number.isFinite(a.seconds[dist.key]))
+    .sort((a, b) => a.seconds[dist.key] - b.seconds[dist.key]);
+  const noTime = standings.all.filter(a => a.active && !Number.isFinite(a.seconds[dist.key]));
+
+  const fastest = withTime[0]?.seconds[dist.key] ?? null;
+
+  const rows = withTime.map((a, i) => {
+    const rk = i + 1;
+    const delta = Number.isFinite(fastest) ? a.seconds[dist.key] - fastest : null;
+    const deltaStr = delta === 0 ? '<span class="delta delta--leader">Snelst</span>' :
+      Number.isFinite(delta) ? `<span class="delta">${fmtDelta(delta)}</span>` : "";
+    const podCls = rk <= 3 ? ` row--${["","gold","silver","bronze"][rk]}` : "";
+    return `<tr class="${podCls}">
+      <td><strong>${rk}</strong> ${medal(rk)}</td>
+      <td><span class="athlete" data-name="${esc(a.name)}">${esc(a.name)}</span></td>
+      <td class="mono">${fmtTime(a.seconds[dist.key])}</td>
+      <td class="mono">${fmtPts(a.points[dist.key])}</td>
+      <td>${deltaStr}</td>
+    </tr>`;
+  }).join("");
+
+  const pendingRows = noTime.map(a =>
+    `<tr style="opacity:.45"><td>—</td><td>${esc(a.name)}</td><td class="mono">—</td><td class="mono">—</td><td></td></tr>`
+  ).join("");
+
+  const sep = withTime.length > 0 && noTime.length > 0 ?
+    `<tr><td colspan="5" style="padding:6px 14px;font-size:11px;font-weight:700;color:var(--text-muted);border-bottom:1px solid var(--border)">Nog te rijden</td></tr>` : "";
+
+  el.contentArea.innerHTML = `
+    <h2 style="font-size:18px;font-weight:800;margin-bottom:12px">${esc(dist.label)}</h2>
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>#</th><th>Naam</th><th>Tijd</th><th>Punten</th><th>Verschil</th></tr></thead>
+      <tbody>${rows}${sep}${pendingRows}</tbody>
+    </table></div>
+  `;
+}
+
+// ── MODULE: HEAD TO HEAD ────────────────────────────────
+function renderH2H() {
+  if (!standings || !standings.ranked.length) {
+    el.contentArea.innerHTML = `<h2 style="font-size:18px;font-weight:800;margin-bottom:12px">Head to Head</h2><div class="info-box">Nog geen resultaten om te vergelijken.</div>`;
+    return;
+  }
+
+  const dists = getDists();
+  const all = standings.all.filter(a => a.active);
+  const opts = all.map(a => `<option value="${esc(a.name)}">${esc(a.name)}</option>`).join("");
+
+  // Defaults
+  if (!state.h2h.riderA || !all.find(a => a.name === state.h2h.riderA)) state.h2h.riderA = standings.ranked[0]?.name;
+  if (!state.h2h.riderB || !all.find(a => a.name === state.h2h.riderB)) state.h2h.riderB = standings.ranked[1]?.name ?? standings.ranked[0]?.name;
+  if (!state.h2h.target || !all.find(a => a.name === state.h2h.target)) state.h2h.target = standings.leader?.name;
+
+  el.contentArea.innerHTML = `
+    <h2 style="font-size:18px;font-weight:800;margin-bottom:12px">Head to Head</h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px">
+      <select id="h2hA" style="padding:6px 10px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-sm);font-size:13px">${opts}</select>
+      <span style="font-size:12px;font-weight:800;color:var(--text-muted)">VS</span>
+      <select id="h2hB" style="padding:6px 10px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-sm);font-size:13px">${opts}</select>
+      <span style="font-size:11px;color:var(--text-dim);margin-left:12px">Target:</span>
+      <select id="h2hT" style="padding:6px 10px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-sm);font-size:13px">${opts}</select>
+    </div>
+    <div id="h2hContent"></div>
+  `;
+
+  const selA = document.getElementById("h2hA"), selB = document.getElementById("h2hB"), selT = document.getElementById("h2hT");
+  selA.value = state.h2h.riderA; selB.value = state.h2h.riderB; selT.value = state.h2h.target;
+
+  function update() {
+    state.h2h.riderA = selA.value; state.h2h.riderB = selB.value; state.h2h.target = selT.value;
+    renderH2HContent();
+  }
+  selA.addEventListener("change", update); selB.addEventListener("change", update); selT.addEventListener("change", update);
+  renderH2HContent();
+}
+
+function renderH2HContent() {
+  const dists = getDists();
+  const rA = standings.all.find(a => a.name === state.h2h.riderA);
+  const rB = standings.all.find(a => a.name === state.h2h.riderB);
+  const target = standings.all.find(a => a.name === state.h2h.target);
+  const cont = document.getElementById("h2hContent");
+  if (!cont || !rA || !rB) return;
+
+  function mirrorBlock(title, left, right) {
+    const rows = dists.map(d => {
+      const sL = left.seconds[d.key], sR = right.seconds[d.key];
+      const tL = Number.isFinite(sL) ? fmtTime(sL) : "—", tR = Number.isFinite(sR) ? fmtTime(sR) : "—";
+      let clsL = "", clsR = "";
+      if (Number.isFinite(sL) && Number.isFinite(sR)) {
+        if (sL < sR) { clsL = "color:var(--green)"; clsR = "color:var(--red)"; }
+        else if (sR < sL) { clsR = "color:var(--green)"; clsL = "color:var(--red)"; }
+      }
+      let diff = "";
+      if (Number.isFinite(sL) && Number.isFinite(sR)) {
+        const dd = sL - sR;
+        diff = dd < 0 ? `<span style="color:var(--green);font-size:11px">${dd.toFixed(2)}s</span>` :
+          dd > 0 ? `<span style="color:var(--red);font-size:11px">+${dd.toFixed(2)}s</span>` : "";
+      }
+      return `<tr>
+        <td class="mono" style="${clsL}">${tL}</td>
+        <td style="text-align:center;font-size:12px;color:var(--text-dim)">${esc(d.label)}</td>
+        <td class="mono" style="text-align:right;${clsR}">${tR}</td>
+        <td style="text-align:right">${diff}</td>
+      </tr>`;
+    }).join("");
+
+    const pL = left.totalPoints ?? left.partialPoints, pR = right.totalPoints ?? right.partialPoints;
+    let pClsL = "", pClsR = "";
+    if (Number.isFinite(pL) && Number.isFinite(pR)) {
+      if (pL < pR) { pClsL = "color:var(--green)"; pClsR = "color:var(--red)"; }
+      else if (pR < pL) { pClsR = "color:var(--green)"; pClsL = "color:var(--red)"; }
+    }
+
+    return `<div style="margin-bottom:20px">
+      <div style="font-size:13px;font-weight:700;color:var(--accent);margin-bottom:8px">${title}</div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>${esc(left.name)}</th><th style="text-align:center">Afstand</th><th style="text-align:right">${esc(right.name)}</th><th style="text-align:right">Δ</th></tr></thead>
+        <tbody>${rows}
+          <tr style="border-top:2px solid var(--border)">
+            <td class="mono" style="font-weight:700;${pClsL}">${fmtPts(pL)} pnt</td>
+            <td style="text-align:center;font-size:12px;font-weight:700;color:var(--text-dim)">Totaal</td>
+            <td class="mono" style="text-align:right;font-weight:700;${pClsR}">${fmtPts(pR)} pnt</td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table></div>
+    </div>`;
+  }
+
+  let html = "";
+
+  // 1. Both riders vs each other
+  html += mirrorBlock(`${esc(rA.name)} vs ${esc(rB.name)}`, rA, rB);
+
+  // 2. Rider A vs Leader
+  if (standings.leader && standings.leader.name !== rA.name && standings.leader.name !== rB.name) {
+    html += mirrorBlock(`${esc(rA.name)} vs Leider (${esc(standings.leader.name)})`, rA, standings.leader);
+  }
+
+  // 3. Both riders vs Target (if different from above)
+  if (target && target.name !== rA.name && target.name !== rB.name) {
+    html += mirrorBlock(`${esc(rA.name)} vs Target (${esc(target.name)})`, rA, target);
+    html += mirrorBlock(`${esc(rB.name)} vs Target (${esc(target.name)})`, rB, target);
+  }
+
+  cont.innerHTML = html;
+}
+
+// ── MODULE: DEELNEMERS ──────────────────────────────────
+function renderDeelnemers() {
+  const parts = getParts();
+  const rows = parts.map(p => {
+    const act = isActive(p.name);
+    return `<tr${!act ? ' style="opacity:.45"' : ""}>
+      <td>${p.nr}</td>
+      <td><span class="athlete" data-name="${esc(p.name)}">${esc(p.name)}</span></td>
+      <td>${esc(p.cat)}</td>
+      <td>${esc(p.qual)}</td>
+      <td><button class="btn ${act ? "btn--ghost" : "btn--danger"}" data-toggle="${esc(p.name)}" style="font-size:11px;padding:3px 10px">${act ? "Actief" : "Inactief"}</button></td>
+    </tr>`;
+  }).join("");
+
+  const activeCount = parts.filter(p => isActive(p.name)).length;
+
+  el.contentArea.innerHTML = `
+    <h2 style="font-size:18px;font-weight:800;margin-bottom:4px">Deelnemers — ${state.gender === "v" ? "Vrouwen" : "Mannen"}</h2>
+    <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px">${activeCount}/${parts.length} actief in klassement</p>
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>Nr</th><th>Naam</th><th>Cat</th><th>Kwalificatie</th><th>Status</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div class="info-box" style="margin-top:12px">Klik op <strong>Actief</strong> om een rijder inactief te zetten (bijv. bij opgave). Inactieve rijders tellen niet mee in het klassement. Tijden blijven zichtbaar.</div>
+  `;
+
+  el.contentArea.addEventListener("click", e => {
+    const btn = e.target.closest("[data-toggle]");
+    if (!btn) return;
+    const name = btn.dataset.toggle;
+    if (inactive[state.gender].has(name)) inactive[state.gender].delete(name);
+    else inactive[state.gender].add(name);
+    saveInactive();
     render();
   });
+}
+
+// ── MODULE: KWALIFICATIE ────────────────────────────────
+function renderKwalificatie() {
+  let html = `<h2 style="font-size:18px;font-weight:800;margin-bottom:16px">Kwalificatie Slotafstand</h2>`;
+
+  for (const gen of ["v", "m"]) {
+    const q = QUAL_CONFIG[gen], dists = DISTANCES[gen], parts = PARTICIPANTS[gen], comps = COMP_IDS[gen];
+    const gLabel = gen === "v" ? "♀ Vrouwen" : "♂ Mannen";
+    const finalDist = dists.find(d => d.key === q.finalDist);
+
+    // Build athlete data from liveData
+    const athletes = parts.filter(p => !inactive[gen].has(p.name)).map(p => {
+      const a = { name: p.name, points: {}, seconds: {} };
+      for (const d of dists) {
+        const res = (liveData[d.key] ?? []).find(r => r.name === p.name);
+        if (res) { a.seconds[d.key] = res.seconds; a.points[d.key] = trunc3(res.seconds / d.divisor); }
+      }
+      return a;
+    });
+
+    // Which distances are completed?
+    const completed = q.first3.filter(dk => athletes.some(a => Number.isFinite(a.seconds[dk])));
+    const use3 = completed.length >= 3;
+    const useDists = use3 ? q.first3 : q.first2;
+    const mode = use3 ? "Definitief (3 afstanden)" : `Voorlopig (${completed.length} afstand${completed.length !== 1 ? "en" : ""})`;
+
+    // Klassement top 8
+    const klassRanked = athletes.map(a => {
+      let sum = 0, cnt = 0;
+      for (const dk of useDists) { const p = a.points[dk]; if (Number.isFinite(p)) { sum += p; cnt++; } }
+      return { ...a, kSum: cnt === useDists.length ? trunc3(sum) : null };
+    }).filter(a => a.kSum != null).sort((a, b) => a.kSum - b.kSum);
+
+    // Afstand top 8 (on qualDist)
+    const distRanked = athletes.filter(a => Number.isFinite(a.seconds[q.qualDist]))
+      .sort((a, b) => a.seconds[q.qualDist] - b.seconds[q.qualDist]);
+
+    const kTop8 = new Set(klassRanked.slice(0, 8).map(a => a.name));
+    const dTop8 = new Set(distRanked.slice(0, 8).map(a => a.name));
+
+    // Qualification logic
+    const qualified = [];
+    const both = [...kTop8].filter(n => dTop8.has(n));
+    const klassOnly = [...kTop8].filter(n => !dTop8.has(n));
+    const distOnly = [...dTop8].filter(n => !kTop8.has(n));
+
+    for (const n of both) qualified.push({ name: n, via: "Klass + Afstand" });
+    for (const n of distOnly.slice(0, klassOnly.length)) qualified.push({ name: n, via: "Via afstand" });
+
+    if (qualified.length === 0 && klassRanked.length === 0) {
+      html += `<div style="margin-bottom:20px"><div style="font-size:14px;font-weight:700;color:var(--accent);margin-bottom:6px">${gLabel} — ${finalDist?.label ?? ""}</div><div class="info-box">Nog geen resultaten.</div></div>`;
+      continue;
+    }
+
+    const qRows = qualified.map((q2, i) => {
+      const a = klassRanked.find(x => x.name === q2.name);
+      return `<tr><td><strong>${i + 1}</strong></td><td>${esc(q2.name)}</td><td class="mono">${a?.kSum != null ? a.kSum.toFixed(3) : "—"}</td><td><span style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(52,211,153,.12);color:var(--green)">${q2.via}</span></td></tr>`;
+    }).join("");
+
+    html += `<div style="margin-bottom:24px">
+      <div style="font-size:14px;font-weight:700;color:var(--accent);margin-bottom:4px">${gLabel} — ${finalDist?.label ?? ""}</div>
+      <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">${mode}</div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>#</th><th>Naam</th><th>Punten</th><th>Kwalificatie</th></tr></thead>
+        <tbody>${qRows}</tbody>
+      </table></div>
+    </div>`;
+  }
+
+  el.contentArea.innerHTML = html;
+}
+
+// ── ATHLETE POPUP ───────────────────────────────────────
+function openPopup(name) {
+  if (!standings) return;
+  const a = standings.all.find(x => x.name === name);
+  if (!a) return;
+  const dists = getDists();
+
+  let html = `<div class="panel">
+    <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:14px">
+      <div>
+        <div style="font-size:18px;font-weight:800">${esc(name)}</div>
+        <div style="font-size:12px;color:var(--text-dim);margin-top:2px">${esc(a.cat)} · ${esc(a.qual)} · ${a.active ? "Actief" : "Inactief"}</div>
+      </div>
+      <button id="closePopup" style="background:none;border:none;color:var(--text-dim);font-size:20px;cursor:pointer">✕</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px">
+      <div style="background:var(--surface-2);padding:10px;border-radius:var(--radius);text-align:center">
+        <div style="font-size:10px;color:var(--text-muted)">Klassement</div>
+        <div style="font-size:20px;font-weight:800">#${a.rank ?? "—"}</div>
+      </div>
+      <div style="background:var(--surface-2);padding:10px;border-radius:var(--radius);text-align:center">
+        <div style="font-size:10px;color:var(--text-muted)">Punten</div>
+        <div style="font-size:20px;font-weight:800">${fmtPts(a.totalPoints ?? a.partialPoints)}</div>
+      </div>
+      <div style="background:var(--surface-2);padding:10px;border-radius:var(--radius);text-align:center">
+        <div style="font-size:10px;color:var(--text-muted)">Afstanden</div>
+        <div style="font-size:20px;font-weight:800">${a.completedCount}/${dists.length}</div>
+      </div>
+    </div>`;
+
+  const rowed = dists.filter(d => a.times[d.key]);
+  if (rowed.length > 0) {
+    html += `<div class="table-wrap"><table class="table">
+      <thead><tr><th>Afstand</th><th>Tijd</th><th>Pos</th><th>Punten</th></tr></thead>
+      <tbody>${rowed.map(d => {
+        const dr = a.distRanks[d.key];
+        return `<tr class="${dr <= 3 ? `row--${["","gold","silver","bronze"][dr]}` : ""}">
+          <td>${esc(d.label)}</td>
+          <td class="mono">${fmtTime(a.seconds[d.key])}</td>
+          <td>${dr ? `${dr} ${medal(dr)}` : "—"}</td>
+          <td class="mono">${fmtPts(a.points[d.key])}</td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table></div>`;
+  }
+
+  html += `</div>`;
+  el.overlay.innerHTML = html;
+  el.overlay.hidden = false;
+  document.getElementById("closePopup")?.addEventListener("click", () => { el.overlay.hidden = true; });
 }
 
 // ── EVENTS ──────────────────────────────────────────────
@@ -350,11 +684,8 @@ function bindEvents() {
     const b = e.target.closest(".tab");
     if (!b?.dataset.gender) return;
     state.gender = b.dataset.gender;
-    lastFetchResults = {};
     render();
-    el.contentArea.innerHTML = '<div class="info-box">⏳ Data ophalen...</div>';
-    lastFetchResults = await fetchAllDists(state.gender);
-    lastUpdate = new Date();
+    await doFetch();
     render();
   });
 
@@ -364,27 +695,55 @@ function bindEvents() {
     state.view = b.dataset.view;
     render();
   });
+
+  document.addEventListener("click", e => {
+    const a = e.target.closest(".athlete");
+    if (a?.dataset.name) openPopup(a.dataset.name);
+  });
+
+  el.overlay?.addEventListener("click", e => { if (e.target === el.overlay) el.overlay.hidden = true; });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") el.overlay.hidden = true; });
+
+  el.debugBtn?.addEventListener("click", () => {
+    const dists = getDists();
+    const info = dists.map(d => {
+      const r = liveData[d.key] ?? [];
+      return `${d.label}: ${r.length} times`;
+    }).join("\n");
+    alert(`Data status (${state.gender}):\n\n${info}\n\nLaatst: ${lastUpdate?.toLocaleTimeString("nl-NL") ?? "—"}`);
+  });
+}
+
+// ── POLL ────────────────────────────────────────────────
+async function doFetch() {
+  liveData = await fetchAllDists(state.gender);
+  lastUpdate = new Date();
+}
+
+let pollTimer = null;
+function startPoll() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try { await doFetch(); render(); } catch (e) { console.warn("[NK] poll:", e); }
+  }, POLL_MS);
 }
 
 // ── BOOT ────────────────────────────────────────────────
 async function boot() {
   try {
     cacheEls();
+    loadInactive();
     bindEvents();
     render();
-    console.log("[NK] Rendered (waiting for data)");
+    console.log("[NK] Rendered (waiting)");
 
-    lastFetchResults = await fetchAllDists(state.gender);
-    lastUpdate = new Date();
+    await doFetch();
     render();
-    console.log("[NK] Data loaded ✅");
+    console.log("[NK] Live ✅");
+    startPoll();
   } catch (e) {
-    console.error("[NK] Boot error:", e);
-    if (el.contentArea) {
-      el.contentArea.innerHTML = `<div style="color:var(--red);padding:20px;font-family:var(--font-mono)">
-        <h3>⚠️ Boot Error</h3><pre>${e.message}\n${e.stack}</pre>
-      </div>`;
-    }
+    console.error("[NK] Boot:", e);
+    if (el.contentArea) el.contentArea.innerHTML = `<div style="color:var(--red);padding:20px;font-family:var(--font-mono)"><h3>⚠️ Error</h3><pre>${e.message}\n${e.stack}</pre></div>`;
   }
 }
 
