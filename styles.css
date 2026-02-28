@@ -211,6 +211,7 @@ body {
   background: rgba(0,0,0,.6); backdrop-filter: blur(4px);
   display: flex; align-items: center; justify-content: center;
 }
+.overlay[hidden] { display: none; }
 .panel {
   background: var(--surface-1); border: 1px solid var(--border);
   border-radius: var(--radius-lg); padding: 20px; width: 90%; max-width: 640px;
