@@ -76,7 +76,7 @@ function esc(s){return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
 function parseTime(raw){if(!raw||typeof raw!=="string")return null;const s=raw.trim().replace(",",".");const mc=s.match(/^(\d{1,2}):(\d{2}(?:\.\d{1,3})?)$/);if(mc)return parseFloat(mc[1])*60+parseFloat(mc[2]);const n=parseFloat(s);return Number.isFinite(n)&&n>0?n:null}
 function fmtTime(sec){if(!Number.isFinite(sec)||sec<=0)return"—";const m=Math.floor(sec/60),s=sec-m*60;const str=s.toFixed(2).padStart(5,"0");return m>0?`${m}:${str.replace(".",",")}`  :str.replace(".",",")}
-function fmtDelta(sec){if(!Number.isFinite(sec))return"—";const sign=sec<0?"−":"+",abs=Math.abs(sec);const m=Math.floor(abs/60),s=abs-m*60;const str=s.toFixed(2).padStart(5,"0");return m>0?`${sign}${m}:${str.replace(".",",")}`  :`${sign}${str.replace(".",",")}`}
+function fmtDelta(sec){if(!Number.isFinite(sec))return"—";const r3=Math.round(sec*1000)/1000;const sign=r3<0?"−":"+",abs=Math.abs(r3);const m=Math.floor(abs/60);const r2=Math.round((abs-m*60)*100)/100;const str=r2.toFixed(2);return m>0?`${sign}${m}:${str.padStart(5,"0").replace(".",",")}`:`${sign}${str.replace(".",",")}`}
 function fmtPts(p){return Number.isFinite(p)?p.toFixed(3):"—"}
 function trunc3(n){return Math.floor(n*1000)/1000}
 function round3(n){return Math.round(n*1000)/1000}
@@ -122,7 +122,7 @@ function computeStandings(){
   // Dist ranks
   for(const d of ds){const s=athletes.filter(a=>Number.isFinite(a.seconds[d.key])).sort((x,y)=>x.seconds[d.key]-y.seconds[d.key]);s.forEach((a,i)=>a.distRanks[d.key]=i+1)}
   // Points
-  for(const a of athletes){let sum=0,cnt=0;for(const d of ds){const p=a.points[d.key];if(Number.isFinite(p)){sum+=p;cnt++}}a.completedCount=cnt;a.totalPoints=cnt===ds.length?trunc3(sum):null;a.partialPoints=cnt>0?trunc3(sum):null;a.currentPoints=a.totalPoints??a.partialPoints}
+  for(const a of athletes){let sum=0,cnt=0;for(const d of ds){const p=a.points[d.key];if(Number.isFinite(p)){sum+=p;cnt++}}a.completedCount=cnt;const clean=Math.round(sum*1e6)/1e6;a.totalPoints=cnt===ds.length?clean:null;a.partialPoints=cnt>0?clean:null;a.currentPoints=a.totalPoints??a.partialPoints}
   // Rank: MOST DISTANCES FIRST → then LOWEST POINTS
   const ranked=athletes.filter(a=>a.active&&a.completedCount>0).sort((a,b)=>{
     if(b.completedCount!==a.completedCount)return b.completedCount-a.completedCount;
@@ -132,7 +132,7 @@ function computeStandings(){
   });
   ranked.forEach((a,i)=>a.rank=i+1);
   const leader=ranked[0],lPts=leader?.currentPoints??null;
-  for(const a of ranked)a.delta=Number.isFinite(lPts)&&Number.isFinite(a.currentPoints)?round3(a.currentPoints-lPts):null;
+  for(const a of ranked)a.delta=Number.isFinite(lPts)&&Number.isFinite(a.currentPoints)?a.currentPoints-lPts:null;
   for(const a of athletes)if(!a.active)a.rank=null;
   standings={all:athletes,ranked,leader};
   dataSource=athletes.some(a=>a.completedCount>0)?"live":"waiting";
@@ -301,7 +301,7 @@ function renderH2HContent(){
 
   function mkTile(rider,label,targetName,needed,targetPts2,cls){
     const rPts=rider.currentPoints;
-    const diff2=Number.isFinite(rPts)&&Number.isFinite(targetPts2)?round3(rPts-targetPts2):null;
+    const diff2=Number.isFinite(rPts)&&Number.isFinite(targetPts2)?rPts-targetPts2:null;
     const diffStr=Number.isFinite(diff2)?`${diff2>0?"+":""}${diff2.toFixed(3)} pnt`:"—";
     const timeStr=Number.isFinite(needed)&&needed>0?fmtTime(needed):(Number.isFinite(needed)?"Al voor":"—");
     const timeColor=Number.isFinite(needed)&&needed>0?cls:"var(--green)";
@@ -353,7 +353,7 @@ function renderKwalificatie(){
     const aths=ps.filter(p=>!inactive[gen].has(p.name)).map(p=>{const a={name:p.name,points:{},seconds:{}};for(const d of ds){const r=(ld[d.key]??[]).find(x=>x.name===p.name);if(r){a.seconds[d.key]=r.seconds;a.points[d.key]=trunc3(r.seconds/d.divisor)}}return a});
     const comp=q.first3.filter(dk=>aths.some(a=>Number.isFinite(a.seconds[dk])));
     const use3=comp.length>=3,useD=use3?q.first3:q.first2;
-    const kR=aths.map(a=>{let s=0,c=0;for(const dk of useD){const p=a.points[dk];if(Number.isFinite(p)){s+=p;c++}}return{...a,kSum:c===useD.length?trunc3(s):null}}).filter(a=>a.kSum!=null).sort((a,b)=>a.kSum-b.kSum);
+    const kR=aths.map(a=>{let s=0,c=0;for(const dk of useD){const p=a.points[dk];if(Number.isFinite(p)){s+=p;c++}}return{...a,kSum:c===useD.length?Math.round(s*1e6)/1e6:null}}).filter(a=>a.kSum!=null).sort((a,b)=>a.kSum-b.kSum);
     const dR=aths.filter(a=>Number.isFinite(a.seconds[q.qualDist])).sort((a,b)=>a.seconds[q.qualDist]-b.seconds[q.qualDist]);
     const kT=new Set(kR.slice(0,8).map(a=>a.name)),dT=new Set(dR.slice(0,8).map(a=>a.name));
     const qual=[];for(const n of[...kT].filter(n=>dT.has(n)))qual.push({name:n,via:"Klass + Afstand"});const kO=[...kT].filter(n=>!dT.has(n)),dO=[...dT].filter(n=>!kT.has(n));for(const n of dO.slice(0,kO.length))qual.push({name:n,via:"Via afstand"});
