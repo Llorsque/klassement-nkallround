@@ -111,8 +111,8 @@ function fmtDelta(sec) {
 }
 function fmtPts(p) { return Number.isFinite(p) ? p.toFixed(3) : "—"; }
 
-/** ROUND UP to 3 decimals (ceiling) — official allround rule */
-function ceil3(n) { return Math.ceil(n * 1000) / 1000; }
+/** Truncate to 3 decimals (afkappen, niet afronden) — official allround rule */
+function trunc3(n) { return Math.floor(n * 1000) / 1000; }
 
 function medal(r) { return { 1: "🥇", 2: "🥈", 3: "🥉" }[r] ?? ""; }
 function podCls(r) { return r >= 1 && r <= 3 ? ` row--${["","gold","silver","bronze"][r]}` : ""; }
@@ -214,7 +214,7 @@ function computeStandings() {
       times: {}, seconds: {}, points: {}, distRanks: {} };
     for (const d of dists) {
       const res = (ld[d.key] ?? []).find(r => r.name === p.name);
-      if (res) { a.times[d.key] = res.time; a.seconds[d.key] = res.seconds; a.points[d.key] = ceil3(res.seconds / d.divisor); }
+      if (res) { a.times[d.key] = res.time; a.seconds[d.key] = res.seconds; a.points[d.key] = trunc3(res.seconds / d.divisor); }
     }
     return a;
   });
@@ -230,8 +230,8 @@ function computeStandings() {
     let sum = 0, cnt = 0;
     for (const d of dists) { const p = a.points[d.key]; if (Number.isFinite(p)) { sum += p; cnt++; } }
     a.completedCount = cnt;
-    a.totalPoints = cnt === dists.length ? ceil3(sum) : null;
-    a.partialPoints = cnt > 0 ? ceil3(sum) : null;
+    a.totalPoints = cnt === dists.length ? trunc3(sum) : null;
+    a.partialPoints = cnt > 0 ? trunc3(sum) : null;
     a.currentPoints = a.totalPoints ?? a.partialPoints;
   }
 
@@ -248,7 +248,7 @@ function computeStandings() {
   const leader = ranked[0];
   const leaderPts = leader?.currentPoints ?? null;
   for (const a of ranked) {
-    a.delta = Number.isFinite(leaderPts) && Number.isFinite(a.currentPoints) ? ceil3(a.currentPoints - leaderPts) : null;
+    a.delta = Number.isFinite(leaderPts) && Number.isFinite(a.currentPoints) ? trunc3(a.currentPoints - leaderPts) : null;
   }
   for (const a of athletes) if (!a.active) a.rank = null;
 
@@ -363,7 +363,7 @@ function renderKlassement() {
       <thead><tr><th>#</th><th>Naam</th>${distHdr}<th>Punten</th><th>Δ</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
-    <div class="info-box" style="margin-top:12px"><strong>Punten</strong> = tijd ÷ (meters ÷ 500), afgerond naar boven op 3 decimalen. Laagste totaal wint.</div>`;
+    <div class="info-box" style="margin-top:12px"><strong>Punten</strong> = tijd in seconden ÷ (meters ÷ 500), afgekapt op 3 decimalen. Laagste totaal wint. Δ = puntenverschil × afstandsfactor in seconden.</div>`;
 
   document.getElementById("ndSel")?.addEventListener("change", e => { state.distKey = e.target.value; render(); });
 }
@@ -416,25 +416,31 @@ function renderDistance() {
     // Needed time on next distance for P1
     const needed = neededTime(a, nextDist.key, leaderPts);
     const needStr = (rk > 1 && Number.isFinite(needed) && needed > 0) ?
-      `<span style="font-size:10px;color:var(--orange)">${fmtTime(needed)}</span>` : "";
+      `<span style="color:var(--orange)">${fmtTime(needed)}</span>` : "";
 
-    return `<tr><td style="width:24px;font-weight:700;font-size:11px;color:var(--text-dim)">${rk}</td><td style="font-size:11px"><span class="athlete" data-name="${esc(a.name)}">${esc(a.name)}</span></td><td class="mono" style="font-size:11px">${fmtPts(a.currentPoints)}</td><td style="font-size:10px">${deltaStr}</td><td>${needStr}</td></tr>`;
+    return `<tr>
+      <td style="width:22px;font-weight:700;font-size:12px;color:var(--text-dim)">${rk}</td>
+      <td style="white-space:nowrap;font-size:12px"><span class="athlete" data-name="${esc(a.name)}">${esc(a.name)}</span></td>
+      <td class="mono" style="font-size:12px;white-space:nowrap">${fmtPts(a.currentPoints)}</td>
+      <td style="white-space:nowrap">${deltaStr}</td>
+      <td class="mono" style="font-size:11px;white-space:nowrap">${needStr}</td>
+    </tr>`;
   }).join("");
 
   const cc = dists.filter(d => standings.all.some(a => a.times[d.key])).length;
 
   el.contentArea.innerHTML = `
     <h2 style="font-size:18px;font-weight:800;margin-bottom:12px">${esc(dist.label)}</h2>
-    <div style="display:grid;grid-template-columns:1fr 320px;gap:16px">
+    <div style="display:grid;grid-template-columns:1fr 380px;gap:20px;align-items:start">
       <div class="table-wrap"><table class="table">
         <thead><tr><th>#</th><th>Naam</th><th>Tijd</th><th>Punten</th><th>Verschil</th></tr></thead>
         <tbody>${mainRows}${sep}${pendingRows}</tbody>
       </table></div>
       <div>
-        <div style="font-size:12px;font-weight:700;color:var(--accent);margin-bottom:6px">Live Klassement <span style="color:var(--text-dim);font-weight:400">(${cc}/${dists.length})</span></div>
-        ${nextDist ? `<div style="font-size:10px;color:var(--text-dim);margin-bottom:6px">Nodig op ${esc(nextDist.label)} voor P1</div>` : ""}
-        <div class="table-wrap" style="max-height:500px;overflow-y:auto"><table class="table">
-          <thead><tr><th>#</th><th>Naam</th><th>Pnt</th><th>Δ</th><th>Nodig</th></tr></thead>
+        <div style="font-size:13px;font-weight:700;color:var(--accent);margin-bottom:4px">Live Klassement <span style="color:var(--text-dim);font-weight:400">(${cc}/${dists.length})</span></div>
+        ${nextDist ? `<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Nodig op ${esc(nextDist.label)} voor P1</div>` : ""}
+        <div class="table-wrap"><table class="table" style="white-space:nowrap">
+          <thead><tr><th>#</th><th>Naam</th><th>Pnt</th><th>Δ</th><th>Nodig P1</th></tr></thead>
           <tbody>${sideRows}</tbody>
         </table></div>
       </div>
@@ -482,60 +488,82 @@ function renderH2HContent() {
   if (!cont || !rA || !rB) return;
 
   const nameA = rA.name.split(" ").pop(), nameB = rB.name.split(" ").pop();
-  const nameTgt = tgt ? tgt.name.split(" ").pop() : "";
+  const leader = standings.leader;
+  const pA = rA.currentPoints, pB = rB.currentPoints, pL = leader?.currentPoints;
 
-  // Single compact table: A time | dist | B time | vs each other | vs target
+  // Per-distance rows
   const rows = dists.map(d => {
-    const sA = rA.seconds[d.key], sB = rB.seconds[d.key], sT = tgt?.seconds[d.key];
-
+    const sA = rA.seconds[d.key], sB = rB.seconds[d.key];
     const tA = Number.isFinite(sA) ? fmtTime(sA) : "—";
     const tB = Number.isFinite(sB) ? fmtTime(sB) : "—";
 
-    // A vs B
+    // A vs B on this distance
     let abDiff = "";
     if (Number.isFinite(sA) && Number.isFinite(sB)) {
       const dd = sA - sB;
-      if (dd < 0) abDiff = `<span style="color:var(--green)">${nameA} ${Math.abs(dd).toFixed(2)}s</span>`;
-      else if (dd > 0) abDiff = `<span style="color:var(--green)">${nameB} ${dd.toFixed(2)}s</span>`;
-      else abDiff = `<span style="color:var(--text-dim)">gelijk</span>`;
-    }
-
-    // A vs Target
-    let atDiff = "", btDiff = "";
-    if (tgt && tgt.name !== rA.name && tgt.name !== rB.name && Number.isFinite(sT)) {
-      if (Number.isFinite(sA)) { const dd = sA - sT; atDiff = dd <= 0 ? `<span style="color:var(--green)">${fmtDelta(dd)}</span>` : `<span style="color:var(--red)">${fmtDelta(dd)}</span>`; }
-      if (Number.isFinite(sB)) { const dd = sB - sT; btDiff = dd <= 0 ? `<span style="color:var(--green)">${fmtDelta(dd)}</span>` : `<span style="color:var(--red)">${fmtDelta(dd)}</span>`; }
+      if (Math.abs(dd) < 0.005) abDiff = '<span style="color:var(--text-dim)">gelijk</span>';
+      else if (dd < 0) abDiff = `<span style="color:var(--green)">${fmtDelta(dd)}</span>`;
+      else abDiff = `<span style="color:var(--red)">${fmtDelta(dd)}</span>`;
     }
 
     return `<tr>
       <td class="mono" style="text-align:right">${tA}</td>
       <td style="text-align:center;font-size:12px;color:var(--text-dim);font-weight:600">${esc(d.label)}</td>
       <td class="mono">${tB}</td>
-      <td style="font-size:11px">${abDiff}</td>
-      <td style="font-size:11px">${atDiff}</td>
-      <td style="font-size:11px">${btDiff}</td>
+      <td style="font-size:11px;text-align:center">${abDiff}</td>
     </tr>`;
   }).join("");
 
-  // Totals
-  const pA = rA.currentPoints, pB = rB.currentPoints, pT = tgt?.currentPoints;
+  // Total points row
   let totalAB = "";
   if (Number.isFinite(pA) && Number.isFinite(pB)) {
     const dd = pA - pB;
-    totalAB = dd < 0 ? `<span style="color:var(--green)">${nameA} ${Math.abs(dd).toFixed(3)}</span>` :
-      dd > 0 ? `<span style="color:var(--green)">${nameB} ${dd.toFixed(3)}</span>` : "gelijk";
+    if (Math.abs(dd) < 0.001) totalAB = "gelijk";
+    else if (dd < 0) totalAB = `<span style="color:var(--green)">${nameA} −${Math.abs(dd).toFixed(3)}</span>`;
+    else totalAB = `<span style="color:var(--red)">${nameB} −${dd.toFixed(3)}</span>`;
   }
 
-  const tgtLabel = tgt && tgt.name !== rA.name && tgt.name !== rB.name ? esc(nameTgt) : "";
+  // Needed times: what does each rider need on each remaining distance to beat the OTHER and the LEADER?
+  function calcNeededTiles(rider, riderLabel, opponent, opponentLabel) {
+    const pR = rider.currentPoints, pO = opponent?.currentPoints;
+    const isLeader = leader && rider.name === leader.name;
+    const diffLeader = Number.isFinite(pR) && Number.isFinite(pL) ? trunc3(pR - pL) : null;
+    const diffOpponent = Number.isFinite(pR) && Number.isFinite(pO) ? trunc3(pR - pO) : null;
+
+    let distRows = "";
+    for (const d of dists) {
+      if (Number.isFinite(rider.seconds[d.key])) continue; // Already ridden
+      const nLeader = neededTime(rider, d.key, pL);
+      const nOpponent = neededTime(rider, d.key, pO);
+      if (!Number.isFinite(nLeader) && !Number.isFinite(nOpponent)) continue;
+      distRows += `<tr>
+        <td style="font-size:12px;color:var(--text-dim)">${esc(d.label)}</td>
+        <td class="mono" style="font-size:12px;color:var(--orange)">${Number.isFinite(nLeader) && nLeader > 0 ? fmtTime(nLeader) : isLeader ? "—" : "—"}</td>
+        <td class="mono" style="font-size:12px;color:var(--accent)">${Number.isFinite(nOpponent) && nOpponent > 0 ? fmtTime(nOpponent) : "—"}</td>
+      </tr>`;
+    }
+
+    return `<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);padding:14px">
+      <div style="font-size:14px;font-weight:700;margin-bottom:2px">${esc(rider.name)} <span style="color:var(--text-dim);font-weight:400">#${rider.rank ?? "—"}</span></div>
+      <div style="font-size:22px;font-weight:800;font-family:var(--font-mono);margin-bottom:6px">${fmtPts(pR)} <span style="font-size:11px;font-weight:400;color:var(--text-dim)">pnt</span></div>
+      ${isLeader ? '<div style="margin-bottom:8px"><span class="delta delta--leader">Leader</span></div>' :
+        `<div style="font-size:12px;color:var(--text-dim);margin-bottom:4px">Achterstand leider: <strong class="mono" style="color:var(--orange)">${Number.isFinite(diffLeader) ? `+${diffLeader.toFixed(3)} pnt` : "—"}</strong></div>`}
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">vs ${esc(opponentLabel)}: <strong class="mono">${Number.isFinite(diffOpponent) ? (diffOpponent <= 0 ? `<span style="color:var(--green)">−${Math.abs(diffOpponent).toFixed(3)} pnt</span>` : `<span style="color:var(--red)">+${diffOpponent.toFixed(3)} pnt</span>`) : "—"}</strong></div>
+      ${distRows ? `<div style="font-size:11px;font-weight:700;color:var(--text-muted);margin-bottom:4px">Benodigde tijd om te winnen:</div>
+        <table style="width:100%;font-size:12px;border-collapse:collapse">
+          <thead><tr><th style="text-align:left;font-size:10px;color:var(--text-muted);padding:2px 6px">Afstand</th><th style="text-align:left;font-size:10px;color:var(--orange);padding:2px 6px">Voor P1</th><th style="text-align:left;font-size:10px;color:var(--accent);padding:2px 6px">vs ${esc(opponentLabel)}</th></tr></thead>
+          <tbody>${distRows}</tbody>
+        </table>` : ""}
+    </div>`;
+  }
 
   cont.innerHTML = `
-    <div class="table-wrap"><table class="table">
+    <div class="table-wrap" style="margin-bottom:16px"><table class="table">
       <thead><tr>
         <th style="text-align:right">${esc(rA.name)} <span style="color:var(--text-muted)">#${rA.rank ?? "—"}</span></th>
         <th style="text-align:center">Afstand</th>
         <th>${esc(rB.name)} <span style="color:var(--text-muted)">#${rB.rank ?? "—"}</span></th>
-        <th>Snelste</th>
-        ${tgtLabel ? `<th>${esc(nameA)} vs ${tgtLabel}</th><th>${esc(nameB)} vs ${tgtLabel}</th>` : "<th></th><th></th>"}
+        <th style="text-align:center">${esc(nameA)} vs ${esc(nameB)}</th>
       </tr></thead>
       <tbody>
         ${rows}
@@ -543,38 +571,16 @@ function renderH2HContent() {
           <td class="mono" style="text-align:right">${fmtPts(pA)}</td>
           <td style="text-align:center;font-size:12px;color:var(--text-dim)">Punten</td>
           <td class="mono">${fmtPts(pB)}</td>
-          <td style="font-size:11px">${totalAB}</td>
-          <td></td><td></td>
+          <td style="font-size:12px;text-align:center">${totalAB}</td>
         </tr>
       </tbody>
     </table></div>
-
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px">
-      ${renderH2HTile(rA, standings.leader)}
-      ${renderH2HTile(rB, standings.leader)}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      ${calcNeededTiles(rA, rA.name, rB, nameB)}
+      ${calcNeededTiles(rB, rB.name, rA, nameA)}
     </div>`;
 }
 
-function renderH2HTile(rider, leader) {
-  if (!rider || !leader) return "";
-  const dists = getDists();
-  const isLeader = rider.name === leader.name;
-  const pR = rider.currentPoints, pL = leader.currentPoints;
-  const diff = Number.isFinite(pR) && Number.isFinite(pL) ? ceil3(pR - pL) : null;
-
-  // Find next dist where rider has no time
-  let nextD = null;
-  for (const d of dists) { if (!Number.isFinite(rider.seconds[d.key])) { nextD = d; break; } }
-  const needed = nextD ? neededTime(rider, nextD.key, pL) : null;
-
-  return `<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);padding:12px">
-    <div style="font-size:13px;font-weight:700;margin-bottom:6px">${esc(rider.name)} <span style="color:var(--text-dim)">#${rider.rank ?? "—"}</span></div>
-    <div style="font-size:24px;font-weight:800;font-family:var(--font-mono)">${fmtPts(pR)} <span style="font-size:12px;font-weight:400;color:var(--text-dim)">pnt</span></div>
-    ${isLeader ? '<div style="margin-top:4px"><span class="delta delta--leader">Leader</span></div>' :
-      `<div style="margin-top:4px;font-size:12px;color:var(--text-dim)">Verschil: <span class="mono">${Number.isFinite(diff) ? `+${diff.toFixed(3)} pnt` : "—"}</span></div>
-      ${nextD && Number.isFinite(needed) && needed > 0 ? `<div style="margin-top:4px;font-size:12px;color:var(--orange)">Nodig op ${esc(nextD.label)}: <strong class="mono">${fmtTime(needed)}</strong></div>` : ""}`}
-  </div>`;
-}
 
 // ── MODULE: DEELNEMERS ──────────────────────────────────
 function renderDeelnemers() {
@@ -617,13 +623,13 @@ function renderKwalificatie() {
     const ld = dataCache[gen] ?? {};
     const athletes = parts.filter(p => !inactive[gen].has(p.name)).map(p => {
       const a = { name: p.name, points: {}, seconds: {} };
-      for (const d of dists) { const res = (ld[d.key] ?? []).find(r => r.name === p.name); if (res) { a.seconds[d.key] = res.seconds; a.points[d.key] = ceil3(res.seconds / d.divisor); } }
+      for (const d of dists) { const res = (ld[d.key] ?? []).find(r => r.name === p.name); if (res) { a.seconds[d.key] = res.seconds; a.points[d.key] = trunc3(res.seconds / d.divisor); } }
       return a;
     });
     const completed = q.first3.filter(dk => athletes.some(a => Number.isFinite(a.seconds[dk])));
     const use3 = completed.length >= 3, useDists = use3 ? q.first3 : q.first2;
     const mode = use3 ? "Definitief (3 afstanden)" : `Voorlopig (${completed.length})`;
-    const klassRanked = athletes.map(a => { let sum = 0, cnt = 0; for (const dk of useDists) { const p = a.points[dk]; if (Number.isFinite(p)) { sum += p; cnt++; } } return { ...a, kSum: cnt === useDists.length ? ceil3(sum) : null }; }).filter(a => a.kSum != null).sort((a, b) => a.kSum - b.kSum);
+    const klassRanked = athletes.map(a => { let sum = 0, cnt = 0; for (const dk of useDists) { const p = a.points[dk]; if (Number.isFinite(p)) { sum += p; cnt++; } } return { ...a, kSum: cnt === useDists.length ? trunc3(sum) : null }; }).filter(a => a.kSum != null).sort((a, b) => a.kSum - b.kSum);
     const distRanked = athletes.filter(a => Number.isFinite(a.seconds[q.qualDist])).sort((a, b) => a.seconds[q.qualDist] - b.seconds[q.qualDist]);
     const kTop8 = new Set(klassRanked.slice(0, 8).map(a => a.name)), dTop8 = new Set(distRanked.slice(0, 8).map(a => a.name));
     const qualified = [];
