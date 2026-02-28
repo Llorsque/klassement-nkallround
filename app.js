@@ -79,6 +79,7 @@ function fmtTime(sec){if(!Number.isFinite(sec)||sec<=0)return"—";const m=Math.
 function fmtDelta(sec){if(!Number.isFinite(sec))return"—";const sign=sec<0?"−":"+",abs=Math.abs(sec);const m=Math.floor(abs/60),s=abs-m*60;const str=s.toFixed(2).padStart(5,"0");return m>0?`${sign}${m}:${str.replace(".",",")}`  :`${sign}${str.replace(".",",")}`}
 function fmtPts(p){return Number.isFinite(p)?p.toFixed(3):"—"}
 function trunc3(n){return Math.floor(n*1000)/1000}
+function round3(n){return Math.round(n*1000)/1000}
 function medal(r){return{1:"🥇",2:"🥈",3:"🥉"}[r]??""}
 function podCls(r){return r>=1&&r<=3?` row--${["","gold","silver","bronze"][r]}`:"";}
 
@@ -131,7 +132,7 @@ function computeStandings(){
   });
   ranked.forEach((a,i)=>a.rank=i+1);
   const leader=ranked[0],lPts=leader?.currentPoints??null;
-  for(const a of ranked)a.delta=Number.isFinite(lPts)&&Number.isFinite(a.currentPoints)?trunc3(a.currentPoints-lPts):null;
+  for(const a of ranked)a.delta=Number.isFinite(lPts)&&Number.isFinite(a.currentPoints)?round3(a.currentPoints-lPts):null;
   for(const a of athletes)if(!a.active)a.rank=null;
   standings={all:athletes,ranked,leader};
   dataSource=athletes.some(a=>a.completedCount>0)?"live":"waiting";
@@ -300,7 +301,7 @@ function renderH2HContent(){
 
   function mkTile(rider,label,targetName,needed,targetPts2,cls){
     const rPts=rider.currentPoints;
-    const diff2=Number.isFinite(rPts)&&Number.isFinite(targetPts2)?trunc3(rPts-targetPts2):null;
+    const diff2=Number.isFinite(rPts)&&Number.isFinite(targetPts2)?round3(rPts-targetPts2):null;
     const diffStr=Number.isFinite(diff2)?`${diff2>0?"+":""}${diff2.toFixed(3)} pnt`:"—";
     const timeStr=Number.isFinite(needed)&&needed>0?fmtTime(needed):(Number.isFinite(needed)?"Al voor":"—");
     const timeColor=Number.isFinite(needed)&&needed>0?cls:"var(--green)";
