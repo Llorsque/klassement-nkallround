@@ -85,7 +85,7 @@ function medal(r){return{1:"🥇",2:"🥈",3:"🥉"}[r]??""}
 function podCls(r){return r>=1&&r<=3?` row--${["","gold","silver","bronze"][r]}`:"";}
 
 // ── STATE ───────────────────────────────────────────────
-const state={gender:"v",view:"klassement",distKey:null,h2h:{riderA:null,riderB:null,target:null,calcDist:null}};
+const state={gender:"v",view:"klassement",distKey:null,h2h:{riderA:null,riderB:null,target:null,calcDist:null},pollDist:"all"};
 const inactive={v:new Set(),m:new Set()};
 function loadInactive(){try{const d=JSON.parse(localStorage.getItem("nk_allround_inactive")??"{}");if(d.v)inactive.v=new Set(d.v);if(d.m)inactive.m=new Set(d.m)}catch(_){}}
 function saveInactive(){try{localStorage.setItem("nk_allround_inactive",JSON.stringify({v:[...inactive.v],m:[...inactive.m]}))}catch(_){}}
@@ -106,17 +106,18 @@ function extractTimes(text,parts){
   for(const p of parts){const k=norm(p.name);if(!k)continue;let s=0;while(true){const i=nt.indexOf(k,s);if(i===-1)break;const w=nt.slice(i,Math.min(nt.length,i+300));re.lastIndex=0;const m=re.exec(w);if(m){const raw=m[1].replace(",",".");if(parseTime(raw)!=null){results.set(k,raw);break}}s=i+k.length}}
   return results;
 }
-async function fetchGender(g){
+async function fetchGender(g,onlyDist){
   const ds=DISTANCES[g],cs=COMP_IDS[g],ps=PARTICIPANTS[g];
   if(!dataCache[g])dataCache[g]={};
-  for(const d of ds){
+  const toFetch=onlyDist?ds.filter(d=>d.key===onlyDist):ds;
+  for(const d of toFetch){
     const t=await fetchPageText(cs[d.key]);
     if(!t){await sleep(300);continue}
     const tm=extractTimes(t,ps),results=[];
     for(const p of ps){const v=tm.get(norm(p.name));if(v){const sec=parseTime(v);if(sec!=null)results.push({name:p.name,time:v,seconds:trunc2(sec)})}}
     if(results.length>0)dataCache[g][d.key]=results;
     console.log(`[NK] ${g} ${d.label}: ${results.length}`);
-    await sleep(400);
+    if(!onlyDist)await sleep(400);
   }
   lastFetch[g]=new Date();
 }
@@ -161,7 +162,7 @@ function neededTime(athlete,distKey,targetPts){
 
 // ── DOM ─────────────────────────────────────────────────
 const el={};
-function cacheEls(){for(const id of["statusBadge","statusText","genderTabs","navButtons","debugBtn","contentArea","overlay","menuBtn","sidebar","mobileMenu","mobileNav"])el[id]=document.getElementById(id)}
+function cacheEls(){for(const id of["statusBadge","statusText","genderTabs","navButtons","debugBtn","contentArea","overlay","menuBtn","sidebar","mobileMenu","mobileNav","pollSelect"])el[id]=document.getElementById(id)}
 function setStatus(){if(!el.statusBadge)return;el.statusBadge.className=`badge badge--${dataSource}`;el.statusText.textContent=dataSource==="live"?"Live":"Laden..."}
 
 // ── RENDER ──────────────────────────────────────────────
@@ -391,7 +392,15 @@ function openPopup(name){
 
 // ── EVENTS ──────────────────────────────────────────────
 function bindEvents(){
-  el.genderTabs?.addEventListener("click",async e=>{const b=e.target.closest(".tab");if(!b?.dataset.gender)return;state.gender=b.dataset.gender;render();if(!dataCache[state.gender]){await fetchGender(state.gender);render()}});
+  function fillPollSelect(){
+    if(!el.pollSelect)return;
+    const ds=getDists();
+    el.pollSelect.innerHTML=`<option value="all">Alle</option>`+ds.map(d=>`<option value="${d.key}"${state.pollDist===d.key?" selected":""}>${d.label}</option>`).join("");
+    el.pollSelect.value=state.pollDist;
+  }
+  fillPollSelect();
+  el.pollSelect?.addEventListener("change",e=>{state.pollDist=e.target.value});
+  el.genderTabs?.addEventListener("click",async e=>{const b=e.target.closest(".tab");if(!b?.dataset.gender)return;state.gender=b.dataset.gender;fillPollSelect();render();if(!dataCache[state.gender]){await fetchGender(state.gender);render()}});
 
   function navClick(e){const b=e.target.closest(".nav-btn");if(!b?.dataset.view)return;state.view=b.dataset.view;el.mobileMenu.hidden=true;render()}
   el.navButtons?.addEventListener("click",navClick);
@@ -408,7 +417,7 @@ function bindEvents(){
 // ── POLL ────────────────────────────────────────────────
 let pollT=null,lastDataHash="";
 function dataHash(){try{return JSON.stringify(dataCache[state.gender]??"").length.toString()}catch(_){return""}}
-function startPoll(){if(pollT)clearInterval(pollT);pollT=setInterval(async()=>{try{lastDataHash=dataHash();await fetchGender(state.gender);if(dataHash()!==lastDataHash)render()}catch(e){console.warn("[NK] poll:",e)}},POLL_MS)}
+function startPoll(){if(pollT)clearInterval(pollT);pollT=setInterval(async()=>{try{lastDataHash=dataHash();const dk=state.pollDist==="all"?undefined:state.pollDist;await fetchGender(state.gender,dk);if(dataHash()!==lastDataHash)render()}catch(e){console.warn("[NK] poll:",e)}},POLL_MS)}
 
 // ── BOOT ────────────────────────────────────────────────
 async function boot(){
